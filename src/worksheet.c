@@ -14,6 +14,7 @@
 #include "xlsxwriter/xmlwriter.h"
 #include "xlsxwriter/worksheet.h"
 #include "xlsxwriter/format.h"
+#include "xlsxwriter/conditional_format.h"
 #include "xlsxwriter/utility.h"
 #include "xlsxwriter/third_party/md5.h"
 
@@ -121,6 +122,10 @@ lxw_worksheet_new(lxw_worksheet_init_data *init_data)
     worksheet->merged_ranges = calloc(1, sizeof(struct lxw_merged_ranges));
     GOTO_LABEL_ON_MEM_ERROR(worksheet->merged_ranges, mem_error);
     STAILQ_INIT(worksheet->merged_ranges);
+
+    worksheet->conditional_formats = calloc(1, sizeof(struct lxw_conditional_formats));
+    GOTO_LABEL_ON_MEM_ERROR(worksheet->conditional_formats, mem_error);
+    STAILQ_INIT(worksheet->conditional_formats);
 
     worksheet->image_props = calloc(1, sizeof(struct lxw_image_props));
     GOTO_LABEL_ON_MEM_ERROR(worksheet->image_props, mem_error);
@@ -366,6 +371,7 @@ lxw_worksheet_free(lxw_worksheet *worksheet)
     lxw_row *next_row;
     lxw_col_t col;
     lxw_merged_range *merged_range;
+    lxw_conditional_format *conditional_format;
     lxw_object_properties *object_props;
     lxw_selection *selection;
     lxw_data_val_obj *data_validation;
@@ -431,6 +437,16 @@ lxw_worksheet_free(lxw_worksheet *worksheet)
         }
 
         free(worksheet->merged_ranges);
+    }
+
+    if (worksheet->conditional_formats) {
+        while (!STAILQ_EMPTY(worksheet->conditional_formats)) {
+            conditional_format = STAILQ_FIRST(worksheet->conditional_formats);
+            STAILQ_REMOVE_HEAD(worksheet->conditional_formats, list_pointers);
+            free(conditional_format);
+        }
+
+        free(worksheet->conditional_formats);
     }
 
     if (worksheet->image_props) {
@@ -3614,6 +3630,76 @@ _worksheet_write_merge_cells(lxw_worksheet *self)
 }
 
 /*
+ * Write the <formula> element for numbers.
+ */
+STATIC void
+_worksheet_write_formula_num(lxw_worksheet *self, double number)
+{
+    char data[LXW_ATTR_32];
+
+    lxw_sprintf_dbl(data, number);
+
+    lxw_xml_data_element(self->file, "formula", data, NULL);
+}
+
+/*
+ * Write the <formula> element for strings/formulas.
+ */
+STATIC void
+_worksheet_write_formula_str(lxw_worksheet *self, char *str)
+{
+    lxw_xml_data_element(self->file, "formula", str, NULL);
+}
+
+STATIC void
+_worksheet_write_conditional_format(lxw_worksheet *self, lxw_conditional_format *conditional_format, int priority)
+{
+    struct xml_attribute_list attributes;
+    struct xml_attribute *attribute;
+
+    LXW_INIT_ATTRIBUTES();
+
+    LXW_PUSH_ATTRIBUTES_STR("type", "cellIs");
+    LXW_PUSH_ATTRIBUTES_INT("dxfId", lxw_format_get_dxf_index(conditional_format->format));
+    LXW_PUSH_ATTRIBUTES_INT("priority", priority);
+    LXW_PUSH_ATTRIBUTES_STR("operator", "equal");
+
+    lxw_xml_start_tag(self->file, "cfRule", &attributes);
+    _worksheet_write_formula_num(self, conditional_format->value);
+    lxw_xml_end_tag(self->file, "cfRule");
+    LXW_FREE_ATTRIBUTES();
+}
+
+/*
+ * Write the <mergeCells> element.
+ */
+STATIC void
+_worksheet_write_conditional_formats(lxw_worksheet *self)
+{
+    struct xml_attribute_list attributes;
+    struct xml_attribute *attribute;
+    lxw_conditional_format *conditional_format;
+
+    if (self->conditional_format_count) {
+        int priority = 1;
+        STAILQ_FOREACH(conditional_format, self->conditional_formats, list_pointers) {
+            LXW_INIT_ATTRIBUTES();
+            char ref[LXW_MAX_CELL_RANGE_LENGTH];
+
+            /* Convert the merge dimensions to a cell range. */
+            lxw_rowcol_to_range(ref, conditional_format->first_row, conditional_format->first_col,
+                                conditional_format->last_row, conditional_format->last_col);
+
+            LXW_PUSH_ATTRIBUTES_STR("sqref", ref);
+            lxw_xml_start_tag(self->file, "conditionalFormatting", &attributes);
+            _worksheet_write_conditional_format(self, conditional_format, priority++);
+            lxw_xml_end_tag(self->file, "conditionalFormatting");
+            LXW_FREE_ATTRIBUTES();
+        }
+    }
+}
+
+/*
  * Write the <oddHeader> element.
  */
 STATIC void
@@ -4445,6 +4531,9 @@ lxw_worksheet_assemble_xml_file(lxw_worksheet *self)
 
     /* Write the mergeCells element. */
     _worksheet_write_merge_cells(self);
+
+    /* Write the conditional formats. */
+    _worksheet_write_conditional_formats(self);
 
     /* Write the dataValidations element. */
     _worksheet_write_data_validations(self);
@@ -5477,6 +5566,46 @@ worksheet_merge_range(lxw_worksheet *self, lxw_row_t first_row,
             worksheet_write_blank(self, tmp_row, tmp_col, format);
         }
     }
+
+    return LXW_NO_ERROR;
+}
+
+lxw_error
+worksheet_conditional_format(lxw_worksheet *self,
+                             lxw_row_t first_row,
+                             lxw_col_t first_col,
+                             lxw_row_t last_row,
+                             lxw_col_t last_col,
+                             lxw_conditional_format *format) {
+    lxw_row_t tmp_row;
+    lxw_col_t tmp_col;
+    lxw_error err;
+
+    /* Swap last row/col with first row/col as necessary */
+    if (first_row > last_row) {
+        tmp_row = last_row;
+        last_row = first_row;
+        first_row = tmp_row;
+    }
+    if (first_col > last_col) {
+        tmp_col = last_col;
+        last_col = first_col;
+        first_col = tmp_col;
+    }
+
+    /* Check that column number is valid and store the max value */
+    err = _check_dimensions(self, last_row, last_col, LXW_FALSE, LXW_FALSE);
+    if (err)
+        return err;
+
+    format->first_row = first_row;
+    format->first_col = first_col;
+    format->last_row = last_row;
+    format->last_col = last_col;
+    lxw_format_get_dxf_index(format->format);
+
+    STAILQ_INSERT_TAIL(self->conditional_formats, format, list_pointers);
+    self->conditional_format_count += 1;
 
     return LXW_NO_ERROR;
 }

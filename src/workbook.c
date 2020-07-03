@@ -231,6 +231,7 @@ lxw_workbook_free(lxw_workbook *workbook)
     }
 
     lxw_hash_free(workbook->used_xf_formats);
+    lxw_hash_free(workbook->used_dxf_formats);
     lxw_sst_free(workbook->sst);
     free(workbook->options.tmpdir);
     free(workbook->ordered_charts);
@@ -298,6 +299,33 @@ _prepare_fonts(lxw_workbook *self)
         }
     }
 
+    LXW_FOREACH_ORDERED(used_format_element, self->used_dxf_formats) {
+        lxw_format *format = (lxw_format *) used_format_element->value;
+        lxw_font *key = lxw_format_get_font_key(format);
+
+        if (key) {
+            /* Look up the format in the hash table. */
+            hash_element = lxw_hash_key_exists(fonts, key, sizeof(lxw_font));
+
+            if (hash_element) {
+                /* Font has already been used. */
+                format->font_index = *(uint16_t *) hash_element->value;
+                format->has_dxf_font = LXW_FALSE;
+                free(key);
+            }
+            else {
+                /* This is a new font. */
+                uint16_t *font_index = calloc(1, sizeof(uint16_t));
+                *font_index = index;
+                format->font_index = index;
+                format->has_dxf_font = 1;
+                lxw_insert_hash_element(fonts, key, font_index,
+                                        sizeof(lxw_font));
+                index++;
+            }
+        }
+    }
+
     lxw_hash_free(fonts);
 
     self->font_count = index;
@@ -337,6 +365,34 @@ _prepare_borders(lxw_workbook *self)
                 *border_index = index;
                 format->border_index = index;
                 format->has_border = 1;
+                lxw_insert_hash_element(borders, key, border_index,
+                                        sizeof(lxw_border));
+                index++;
+            }
+        }
+    }
+
+    LXW_FOREACH_ORDERED(used_format_element, self->used_dxf_formats) {
+        lxw_format *format = (lxw_format *) used_format_element->value;
+        lxw_border *key = lxw_format_get_border_key(format);
+
+        if (key) {
+            /* Look up the format in the hash table. */
+            hash_element =
+                lxw_hash_key_exists(borders, key, sizeof(lxw_border));
+
+            if (hash_element) {
+                /* Border has already been used. */
+                format->border_index = *(uint16_t *) hash_element->value;
+                format->has_border = LXW_FALSE;
+                free(key);
+            }
+            else {
+                /* This is a new border. */
+                uint16_t *border_index = calloc(1, sizeof(uint16_t));
+                *border_index = index;
+                format->border_index = index;
+                format->has_dxf_border = 1;
                 lxw_insert_hash_element(borders, key, border_index,
                                         sizeof(lxw_border));
                 index++;
@@ -450,6 +506,66 @@ _prepare_fills(lxw_workbook *self)
         }
     }
 
+    LXW_FOREACH_ORDERED(used_format_element, self->used_dxf_formats) {
+        lxw_format *format = (lxw_format *) used_format_element->value;
+        lxw_fill *key = lxw_format_get_fill_key(format);
+
+        /* The following logical statements jointly take care of special */
+        /* cases in relation to cell colors and patterns:                */
+        /* 1. For a solid fill (pattern == 1) Excel reverses the role of */
+        /*    foreground and background colors, and                      */
+        /* 2. If the user specifies a foreground or background color     */
+        /*    without a pattern they probably wanted a solid fill, so    */
+        /*    we fill in the defaults.                                   */
+        if (format->pattern != LXW_PATTERN_NONE) {
+            format->has_dxf_fill = 1;
+        }
+        if (format->pattern == LXW_PATTERN_SOLID
+            && format->bg_color != LXW_COLOR_UNSET
+            && format->fg_color != LXW_COLOR_UNSET) {
+            lxw_color_t tmp = format->fg_color;
+            format->fg_color = format->bg_color;
+            format->bg_color = tmp;
+        }
+
+        if (format->pattern <= LXW_PATTERN_SOLID
+            && format->bg_color != LXW_COLOR_UNSET
+            && format->fg_color == LXW_COLOR_UNSET) {
+            format->fg_color = format->bg_color;
+            format->bg_color = LXW_COLOR_UNSET;
+            format->pattern = LXW_PATTERN_SOLID;
+        }
+
+        if (format->pattern <= LXW_PATTERN_SOLID
+            && format->bg_color == LXW_COLOR_UNSET
+            && format->fg_color != LXW_COLOR_UNSET) {
+            format->bg_color = LXW_COLOR_UNSET;
+            format->pattern = LXW_PATTERN_SOLID;
+        }
+
+        if (key) {
+            /* Look up the format in the hash table. */
+            hash_element = lxw_hash_key_exists(fills, key, sizeof(lxw_fill));
+
+            if (hash_element) {
+                /* Fill has already been used. */
+                format->fill_index = *(uint16_t *) hash_element->value;
+                format->has_fill = LXW_FALSE;
+                free(key);
+            }
+            else {
+                /* This is a new fill. */
+                uint16_t *fill_index = calloc(1, sizeof(uint16_t));
+                *fill_index = index;
+                format->fill_index = index;
+                format->has_fill = 1;
+                lxw_insert_hash_element(fills, key, fill_index,
+                                        sizeof(lxw_fill));
+                index++;
+            }
+        }
+    }
+
     lxw_hash_free(fills);
 
     self->fill_count = index;
@@ -480,6 +596,41 @@ _prepare_num_formats(lxw_workbook *self)
     uint16_t *num_format_index;
 
     LXW_FOREACH_ORDERED(used_format_element, self->used_xf_formats) {
+        lxw_format *format = (lxw_format *) used_format_element->value;
+
+        /* Format already has a number format index. */
+        if (format->num_format_index)
+            continue;
+
+        /* Check if there is a user defined number format string. */
+        if (*format->num_format) {
+            char num_format[LXW_FORMAT_FIELD_LEN] = { 0 };
+            lxw_snprintf(num_format, LXW_FORMAT_FIELD_LEN, "%s",
+                         format->num_format);
+
+            /* Look up the num_format in the hash table. */
+            hash_element = lxw_hash_key_exists(num_formats, num_format,
+                                               LXW_FORMAT_FIELD_LEN);
+
+            if (hash_element) {
+                /* Num_Format has already been used. */
+                format->num_format_index = *(uint16_t *) hash_element->value;
+            }
+            else {
+                /* This is a new num_format. */
+                num_format_index = calloc(1, sizeof(uint16_t));
+                *num_format_index = index;
+                format->num_format_index = index;
+                lxw_insert_hash_element(num_formats, format->num_format,
+                                        num_format_index,
+                                        LXW_FORMAT_FIELD_LEN);
+                index++;
+                num_format_count++;
+            }
+        }
+    }
+
+    LXW_FOREACH_ORDERED(used_format_element, self->used_dxf_formats) {
         lxw_format *format = (lxw_format *) used_format_element->value;
 
         /* Format already has a number format index. */
@@ -1578,6 +1729,8 @@ workbook_new_opt(const char *filename, lxw_workbook_options *options)
     /* Add a hash table to track format indices. */
     workbook->used_xf_formats = lxw_hash_new(128, 1, 0);
     GOTO_LABEL_ON_MEM_ERROR(workbook->used_xf_formats, mem_error);
+    workbook->used_dxf_formats = lxw_hash_new(128, 1, 0);
+    GOTO_LABEL_ON_MEM_ERROR(workbook->used_dxf_formats, mem_error);
 
     /* Add the worksheets list. */
     workbook->custom_properties =
@@ -1811,6 +1964,9 @@ workbook_add_format(lxw_workbook *self)
 
     format->xf_format_indices = self->used_xf_formats;
     format->num_xf_formats = &self->num_xf_formats;
+
+    format->dxf_format_indices = self->used_dxf_formats;
+    format->num_dxf_formats = &self->num_dxf_formats;
 
     STAILQ_INSERT_TAIL(self->formats, format, list_pointers);
 

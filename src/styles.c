@@ -37,6 +37,11 @@ lxw_styles_new(void)
 
     STAILQ_INIT(styles->xf_formats);
 
+    styles->dxf_formats = calloc(1, sizeof(struct lxw_formats));
+    GOTO_LABEL_ON_MEM_ERROR(styles->dxf_formats, mem_error);
+
+    STAILQ_INIT(styles->dxf_formats);
+
     return styles;
 
 mem_error:
@@ -63,6 +68,15 @@ lxw_styles_free(lxw_styles *styles)
             free(format);
         }
         free(styles->xf_formats);
+    }
+
+    if (styles->dxf_formats) {
+        while (!STAILQ_EMPTY(styles->dxf_formats)) {
+            format = STAILQ_FIRST(styles->dxf_formats);
+            STAILQ_REMOVE_HEAD(styles->dxf_formats, list_pointers);
+            free(format);
+        }
+        free(styles->dxf_formats);
     }
 
     free(styles);
@@ -627,6 +641,11 @@ _write_fills(lxw_styles *self)
             _write_fill(self, format);
     }
 
+    STAILQ_FOREACH(format, self->dxf_formats, list_pointers) {
+        if (format->has_fill)
+            _write_fill(self, format);
+    }
+
     lxw_xml_end_tag(self->file, "fills");
 
     LXW_FREE_ATTRIBUTES();
@@ -761,6 +780,10 @@ _write_borders(lxw_styles *self)
     lxw_xml_start_tag(self->file, "borders", &attributes);
 
     STAILQ_FOREACH(format, self->xf_formats, list_pointers) {
+        if (format->has_border)
+            _write_border(self, format);
+    }
+    STAILQ_FOREACH(format, self->dxf_formats, list_pointers) {
         if (format->has_border)
             _write_border(self, format);
     }
@@ -1171,6 +1194,29 @@ _write_cell_styles(lxw_styles *self)
 }
 
 /*
+ * Write the <dxf> element.
+ */
+STATIC void
+_write_dxf(lxw_styles *self, lxw_format *format)
+{
+    lxw_xml_start_tag(self->file, "dxf", NULL);
+
+    if (format->has_dxf_font)
+        _write_font(self, format, LXW_TRUE);
+
+    if (format->num_format_index)
+        _write_num_fmt(self, format->num_format_index, format->num_format);
+
+    if (format->has_dxf_fill)
+        _write_fill(self, format);
+
+    if (format->has_dxf_border)
+        _write_border(self, format);
+
+    lxw_xml_end_tag(self->file, "dxf");
+}
+
+/*
  * Write the <dxfs> element.
  */
 STATIC void
@@ -1178,11 +1224,32 @@ _write_dxfs(lxw_styles *self)
 {
     struct xml_attribute_list attributes;
     struct xml_attribute *attribute;
+    lxw_format *format;
+    uint32_t count = self->dxf_count;
+    uint32_t i = 0;
+
+
+    /* If the last format is "font_only" it is for the comment font and
+     * shouldn't be counted. This is a workaround to get the last object
+     * in the list since STAILQ_LAST() requires __containerof and isn't
+     * ANSI compatible. */
+    STAILQ_FOREACH(format, self->dxf_formats, list_pointers) {
+        i++;
+        if (i == self->dxf_count && format->font_only)
+            count--;
+    }
 
     LXW_INIT_ATTRIBUTES();
-    LXW_PUSH_ATTRIBUTES_STR("count", "0");
+    LXW_PUSH_ATTRIBUTES_INT("count", count);
 
-    lxw_xml_empty_tag(self->file, "dxfs", &attributes);
+    lxw_xml_start_tag(self->file, "dxfs", &attributes);
+
+    STAILQ_FOREACH(format, self->dxf_formats, list_pointers) {
+        if (!format->font_only)
+            _write_dxf(self, format);
+    }
+
+    lxw_xml_end_tag(self->file, "dxfs");
 
     LXW_FREE_ATTRIBUTES();
 }

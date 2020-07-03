@@ -809,11 +809,25 @@ _write_styles_file(lxw_packager *self)
         STAILQ_INSERT_TAIL(styles->xf_formats, style_format, list_pointers);
     }
 
+    LXW_FOREACH_ORDERED(hash_element, self->workbook->used_dxf_formats) {
+        lxw_format *workbook_format = (lxw_format *) hash_element->value;
+        lxw_format *style_format = lxw_format_new();
+
+        if (!style_format) {
+            err = LXW_ERROR_MEMORY_MALLOC_FAILED;
+            goto mem_error;
+        }
+
+        memcpy(style_format, workbook_format, sizeof(lxw_format));
+        STAILQ_INSERT_TAIL(styles->dxf_formats, style_format, list_pointers);
+    }
+
     styles->font_count = self->workbook->font_count;
     styles->border_count = self->workbook->border_count;
     styles->fill_count = self->workbook->fill_count;
     styles->num_format_count = self->workbook->num_format_count;
     styles->xf_count = self->workbook->used_xf_formats->unique_count;
+    styles->dxf_count = self->workbook->used_dxf_formats->unique_count;
     styles->has_comments = self->workbook->has_comments;
 
     styles->file = lxw_tmpfile(self->tmpdir);

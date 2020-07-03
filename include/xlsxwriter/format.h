@@ -350,6 +350,8 @@ typedef struct lxw_format {
     FILE *file;
 
     lxw_hash_table *xf_format_indices;
+    lxw_hash_table *dxf_format_indices;
+    uint16_t *num_dxf_formats;
     uint16_t *num_xf_formats;
 
     int32_t xf_index;
@@ -487,6 +489,7 @@ extern "C" {
 lxw_format *lxw_format_new(void);
 void lxw_format_free(lxw_format *format);
 int32_t lxw_format_get_xf_index(lxw_format *format);
+int32_t lxw_format_get_dxf_index(lxw_format *format);
 lxw_font *lxw_format_get_font_key(lxw_format *format);
 lxw_border *lxw_format_get_border_key(lxw_format *format);
 lxw_fill *lxw_format_get_fill_key(lxw_format *format);

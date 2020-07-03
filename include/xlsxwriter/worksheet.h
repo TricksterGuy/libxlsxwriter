@@ -50,6 +50,7 @@
 
 #include "shared_strings.h"
 #include "chart.h"
+#include "conditional_format.h"
 #include "drawing.h"
 #include "common.h"
 #include "format.h"
@@ -308,6 +309,7 @@ struct lxw_table_rows {
     struct lxw_rb_generate_drawing_rel_ids{int unused;}
 
 STAILQ_HEAD(lxw_merged_ranges, lxw_merged_range);
+STAILQ_HEAD(lxw_conditional_formats, lxw_conditional_format);
 STAILQ_HEAD(lxw_selections, lxw_selection);
 STAILQ_HEAD(lxw_data_validations, lxw_data_val_obj);
 STAILQ_HEAD(lxw_image_props, lxw_object_properties);
@@ -940,6 +942,7 @@ typedef struct lxw_worksheet {
     struct lxw_chart_props *chart_data;
     struct lxw_drawing_rel_ids *drawing_rel_ids;
     struct lxw_comment_objs *comment_objs;
+    struct lxw_conditional_formats *conditional_formats;
 
     lxw_row_t dim_rowmin;
     lxw_row_t dim_rowmax;
@@ -1033,6 +1036,7 @@ typedef struct lxw_worksheet {
     struct lxw_autofilter autofilter;
 
     uint16_t merged_range_count;
+    uint16_t conditional_format_count;
     uint16_t max_url_length;
 
     lxw_row_t *hbreaks;
@@ -2356,6 +2360,14 @@ lxw_error worksheet_merge_range(lxw_worksheet *worksheet, lxw_row_t first_row,
                                 lxw_col_t first_col, lxw_row_t last_row,
                                 lxw_col_t last_col, const char *string,
                                 lxw_format *format);
+
+lxw_error
+worksheet_conditional_format(lxw_worksheet *self,
+                             lxw_row_t first_row,
+                             lxw_col_t first_col,
+                             lxw_row_t last_row,
+                             lxw_col_t last_col,
+                             lxw_conditional_format *format);
 
 /**
  * @brief Set the autofilter area in the worksheet.
@@ -3754,6 +3766,7 @@ STATIC lxw_row *_get_row_list(struct lxw_table_rows *table,
 STATIC void _worksheet_write_merge_cell(lxw_worksheet *worksheet,
                                         lxw_merged_range *merged_range);
 STATIC void _worksheet_write_merge_cells(lxw_worksheet *worksheet);
+STATIC void _worksheet_write_conditional_formats(lxw_worksheet *worksheet);
 
 STATIC void _worksheet_write_odd_header(lxw_worksheet *worksheet);
 STATIC void _worksheet_write_odd_footer(lxw_worksheet *worksheet);
